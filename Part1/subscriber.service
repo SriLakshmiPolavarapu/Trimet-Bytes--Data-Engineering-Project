@@ -1,0 +1,13 @@
+[Unit]
+Description=Google Pub/Sub Subscriber Script
+After=network.target
+
+[Service]
+User=srilakp
+WorkingDirectory=/home/srilakp
+ExecStart=/home/srilakp/myenv/bin/python3 /home/srilakp/subscriber_project.py
+Restart=always
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target

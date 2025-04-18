@@ -8,8 +8,11 @@ output_folder = "bus_data"
 os.makedirs(output_folder, exist_ok=True)
 
 # Load vehicle IDs from a file
-with open("vehicle_ids.txt") as f:
+script_dir = os.path.dirname(os.path.abspath(__file__))
+vehicle_ids_path = os.path.join(script_dir, "vehicle_ids.txt")
+with open(vehicle_ids_path) as f:
     vehicle_ids = [line.strip() for line in f]
+
 
 today = datetime.date.today().isoformat()  # e.g., '2025-04-09'
 
