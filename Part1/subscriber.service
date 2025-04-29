@@ -5,7 +5,7 @@ After=network.target
 [Service]
 User=srilakp
 WorkingDirectory=/home/srilakp
-ExecStart=/home/srilakp/myenv/bin/python3 /home/srilakp/subscriber_project.py
+ExecStart=/home/srilakp/venv/bin/python3 /home/srilakp/new_subscriber.py
 Restart=always
 Environment="PYTHONUNBUFFERED=1"
 
