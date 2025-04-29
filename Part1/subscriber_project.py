@@ -1,15 +1,12 @@
 import os
 import json
+import shutil
 from datetime import datetime
 from google.cloud import pubsub_v1
 import logging
 
-# === Logging Setup ===
-logging.basicConfig(
-    filename='/home/srilakp/subscriber.log',
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s'
-)
+# === Disable all logging output ===
+logging.getLogger().disabled = True
 logger = logging.getLogger(__name__)
 
 # === CONFIGURATION ===
@@ -21,26 +18,37 @@ os.makedirs(output_dir, exist_ok=True)
 
 # === Callback to process each message ===
 def callback(message):
-    print(f"Received raw message: {message.data}")
-    logger.info(f"Received raw message: {message.data}")
     try:
         record = json.loads(message.data.decode("utf-8"))
-        today_opd = datetime.now().strftime("%d%b%Y").upper() + ":00:00:00"  # e.g., 13APR2025:00:00:00
-        opd_date_str = record.get("OPD_DATE", today_opd)  # Default to today
+        
+        opd_date_str = record.get("OPD_DATE")
+        if not opd_date_str:
+            message.ack()  # or nack(), depending on your policy
+            return
         date_obj = datetime.strptime(opd_date_str, "%d%b%Y:%H:%M:%S")
-        date_str = date_obj.strftime("%Y-%m-%d")  # e.g., 2025-04-13
+        date_str = date_obj.strftime("%Y-%m-%d")  # e.g., 2025-04-28
+
         output_file = os.path.join(output_dir, f"{date_str}.jsonl")
-        print(f"Attempting to save to {output_file}")
-        logger.info(f"Attempting to save to {output_file}")
+
         with open(output_file, "a") as f:
             f.write(json.dumps(record) + "\n")
-        print(f"Saved message to {output_file}")
+        
         logger.info(f"Saved message to {output_file}")
+
         message.ack()
+
     except Exception as e:
-        print(f"Error processing message: {e}")
+       # print(f"Error processing message: {e}")
         logger.error(f"Error processing message: {e}")
         message.nack()
+
+# === (Optional) Function to compress the received data folder ===
+def compress_received_data():
+    today_str = datetime.now().date().isoformat()
+    zip_base = f"received_data_{today_str}"
+    shutil.make_archive(zip_base, 'zip', output_dir)
+    # print(f"Compressed received_data/ into {zip_base}.zip")
+    logger.info(f"Compressed received_data/ into {zip_base}.zip")
 
 # === Subscriber setup ===
 subscriber = pubsub_v1.SubscriberClient()
