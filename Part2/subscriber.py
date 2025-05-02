@@ -25,7 +25,7 @@ def callback(message: pubsub_v1.subscriber.message.Message) -> None:
     message.ack()
 
 streaming_pull_future = subscriber.subscribe(subscription_path, callback=callback)
-print(f"🎧 Listening for messages on {subscription_path}...\n")
+print(f"Listening for messages on {subscription_path}...\n")
 
 with subscriber:
     try:
