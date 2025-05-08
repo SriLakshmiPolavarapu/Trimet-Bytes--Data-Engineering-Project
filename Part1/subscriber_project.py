@@ -1,67 +1,130 @@
+from io import StringIO
+import psycopg2
+from google.cloud import pubsub_v1
+from datetime import datetime, timedelta
 import os
 import json
-import shutil
-from datetime import datetime
-from google.cloud import pubsub_v1
-import logging
+import pandas as pd
 
-# === Disable all logging output ===
-logging.getLogger().disabled = True
-logger = logging.getLogger(__name__)
-
-# === CONFIGURATION ===
+# === Your Config ===
 project_id = "dataengineeringproject-456307"
 subscription_id = "MyTopic1-sub"
-output_dir = "received_data"
+DBname = "trimet_data"
+DBuser = "srilakshmi"
+DBpwd = "#####"
 
-os.makedirs(output_dir, exist_ok=True)
-
-# === Callback to process each message ===
-def callback(message):
-    try:
-        record = json.loads(message.data.decode("utf-8"))
-        
-        opd_date_str = record.get("OPD_DATE")
-        if not opd_date_str:
-            message.ack()  # or nack(), depending on your policy
-            return
-        date_obj = datetime.strptime(opd_date_str, "%d%b%Y:%H:%M:%S")
-        date_str = date_obj.strftime("%Y-%m-%d")  # e.g., 2025-04-28
-
-        output_file = os.path.join(output_dir, f"{date_str}.jsonl")
-
-        with open(output_file, "a") as f:
-            f.write(json.dumps(record) + "\n")
-        
-        logger.info(f"Saved message to {output_file}")
-
-        message.ack()
-
-    except Exception as e:
-       # print(f"Error processing message: {e}")
-        logger.error(f"Error processing message: {e}")
-        message.nack()
-
-# === (Optional) Function to compress the received data folder ===
-def compress_received_data():
-    today_str = datetime.now().date().isoformat()
-    zip_base = f"received_data_{today_str}"
-    shutil.make_archive(zip_base, 'zip', output_dir)
-    # print(f"Compressed received_data/ into {zip_base}.zip")
-    logger.info(f"Compressed received_data/ into {zip_base}.zip")
-
-# === Subscriber setup ===
+# === Pub/Sub Setup ===
 subscriber = pubsub_v1.SubscriberClient()
 subscription_path = subscriber.subscription_path(project_id, subscription_id)
+json_list = []
 
-print(f"Listening to {subscription_path}")
-logger.info(f"Listening to {subscription_path}")
-streaming_pull = subscriber.subscribe(subscription_path, callback=callback)
+def callback(message: pubsub_v1.subscriber.message.Message) -> None:
+    try:
+        json_message = json.loads(message.data.decode('utf-8'))
+        json_list.append(json_message)
+    except Exception as e:
+        print(f"[callback] error decoding message: {e}")
+    finally:
+        message.ack()
 
-# === Keep the subscriber running ===
-try:
-    streaming_pull.result()
-except KeyboardInterrupt:
-    streaming_pull.cancel()
-    print("Subscriber stopped.")
-    logger.info("Subscriber stopped")
+streaming_pull_future = subscriber.subscribe(subscription_path, callback=callback)
+print(f"Listening for messages on {subscription_path}...\n")
+
+with subscriber:
+    try:
+        # Will listen until an exception occurs
+        streaming_pull_future.result(timeout=400.0)
+    except Exception as e:
+        print(f"[Pub/Sub] streaming pull terminated: {e}")
+        streaming_pull_future.cancel()
+
+# === Load into DataFrame ===
+df = pd.DataFrame(json_list)
+
+if not df.empty:
+    print(f"Received {len(df)} messages")
+
+    # === Transformations ===
+    df['NEW_OPD_DATE'] = pd.to_datetime(df['OPD_DATE'], format='%d%b%Y:%H:%M:%S', errors='coerce')
+    df['DAY_OF_WEEK'] = df['NEW_OPD_DATE'].dt.dayofweek
+    df['DAY_NAME'] = df['DAY_OF_WEEK'].map({
+        0: 'Weekday', 1: 'Weekday', 2: 'Weekday',
+        3: 'Weekday', 4: 'Weekday', 5: 'Saturday', 6: 'Sunday'
+    })
+
+    def create_timestamp(row):
+        try:
+            opd_date = datetime.strptime(row['OPD_DATE'], '%d%b%Y:%H:%M:%S')
+            act_time = timedelta(seconds=min(row.get('ACT_TIME', 0), 86399))
+            return pd.Timestamp(opd_date + act_time)
+        except Exception as e:
+            print(f"[create_timestamp] error on row {row.name}: {e}")
+            return pd.NaT
+
+    df['TIMESTAMP'] = df.apply(create_timestamp, axis=1)
+    df.sort_values(by=['EVENT_NO_TRIP', 'TIMESTAMP', 'VEHICLE_ID'], inplace=True)
+
+    # Calculate speed (meters per second)
+    df['SPEED'] = df.groupby('EVENT_NO_TRIP')['METERS'].diff() / df.groupby('EVENT_NO_TRIP')['ACT_TIME'].diff()
+    df['SPEED'] = df['SPEED'].bfill().clip(lower=0)
+
+    # Fill missing GPS coords
+    df['GPS_LATITUDE'] = df['GPS_LATITUDE'].fillna(0.0)
+    df['GPS_LONGITUDE'] = df['GPS_LONGITUDE'].fillna(0.0)
+
+    # Dedupe for trip table
+    result_df = df.drop_duplicates(subset=['EVENT_NO_TRIP'], keep='first').copy()
+    result_df.loc[:, 'ROUTE_ID'] = 0
+    result_df.loc[:, 'DIRECTION'] = 'Out'  # ENUM-safe value
+
+    # Prepare trip DataFrame
+    df_trip = result_df[[
+        'EVENT_NO_TRIP', 'ROUTE_ID', 'VEHICLE_ID', 'DAY_NAME', 'DIRECTION'
+    ]].rename(columns={
+        'EVENT_NO_TRIP': 'trip_id',
+        'ROUTE_ID': 'route_id',
+        'VEHICLE_ID': 'vehicle_id',
+        'DAY_NAME': 'service_key',
+        'DIRECTION': 'direction'
+    })
+
+    # Prepare breadcrumb DataFrame
+    df_breadcrumb = df[[
+        'TIMESTAMP', 'GPS_LATITUDE', 'GPS_LONGITUDE', 'SPEED', 'EVENT_NO_TRIP'
+    ]].rename(columns={
+        'TIMESTAMP': 'tstamp',
+        'GPS_LATITUDE': 'latitude',
+        'GPS_LONGITUDE': 'longitude',
+        'SPEED': 'speed',
+        'EVENT_NO_TRIP': 'trip_id'
+    })
+
+    # === PostgreSQL Insert ===
+    conn = psycopg2.connect(
+        host="localhost",
+        database=DBname,
+        user=DBuser,
+        password=DBpwd
+    )
+
+    def copy_from_df(conn, df, table):
+        buffer = StringIO()
+        df.to_csv(buffer, index=False, header=False)
+        buffer.seek(0)
+        cursor = conn.cursor()
+        try:
+            cursor.copy_from(buffer, table, sep=",")
+            conn.commit()
+            print(f"[copy_from_df] Loaded {table} with {len(df)} rows")
+        except Exception as e:
+            print(f"[copy_from_df] Error loading {table}: {e}")
+            conn.rollback()
+        finally:
+            cursor.close()
+
+    copy_from_df(conn, df_trip, "trip")
+    copy_from_df(conn, df_breadcrumb, "breadcrumb")
+
+    conn.close()
+else:
+    print("No messages received.")
