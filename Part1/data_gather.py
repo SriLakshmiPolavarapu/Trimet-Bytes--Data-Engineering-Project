@@ -3,9 +3,16 @@ import json
 import requests
 import zipfile
 import shutil
-import pandas as pd
+import logging
 from datetime import date
 from google.cloud import pubsub_v1
+import pandas as pd
+import concurrent. futures
+
+# === LOAD SERVICE ACCOUNT KEY ===
+script_dir = os.path.dirname(os.path.abspath(__file__))
+KEY_PATH = os.path.join(script_dir, "dataengineeringproject-456307-2dca2bb9e633.json")
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = KEY_PATH
 
 # === CONFIGURATION ===
 today_str = date.today().isoformat()
@@ -15,33 +22,27 @@ extract_folder = os.path.join("extracted_json", today_str)
 
 project_id = "dataengineeringproject-456307"
 topic_id = "MyTopic1"
+
+# Initialize Pub/Sub publisher
 publisher = pubsub_v1.PublisherClient()
 topic_path = publisher.topic_path(project_id, topic_id)
 
-# === Helper: Folder Size in Bytes ===
-def get_folder_size(folder):
-    total_size = 0
-    for dirpath, _, filenames in os.walk(folder):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            if os.path.isfile(fp):
-                total_size += os.path.getsize(fp)
-    return total_size
+# set up basic logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s:%(message)s")
+logger = logging.getLogger(__name__)
 
-# === Step 1: Gather and Save Bus Data ===
 def gather_bus_data():
     os.makedirs(output_folder, exist_ok=True)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
     vehicle_ids_path = os.path.join(script_dir, "vehicle_ids.csv")
 
     try:
         df = pd.read_csv(vehicle_ids_path, header=None)
         vehicle_ids = df[0].astype(str).str.strip().tolist()
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to read vehicle_ids.csv: {e}")
         return 0
 
     total_records = 0
-
     for vid in vehicle_ids:
         try:
             url = f"https://busdata.cs.pdx.edu/api/getBreadCrumbs?vehicle_id={vid}"
@@ -52,59 +53,77 @@ def gather_bus_data():
                 file_path = os.path.join(output_folder, f"bus_{vid}_{today_str}.json")
                 with open(file_path, "w") as out:
                     out.write(response.text)
-        except Exception:
-            pass
+            else:
+                logger.debug(f"Non-200 for {vid}: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Error gathering data for vehicle {vid}: {e}")
 
     os.makedirs(processed_data_folder, exist_ok=True)
     zip_base = os.path.join(processed_data_folder, f"bus_data_{today_str}")
-    shutil.make_archive(zip_base, 'zip', output_folder)
+    try:
+        shutil.make_archive(zip_base, 'zip', output_folder)
+    except Exception as e:
+        logger.error(f"Error creating zip archive: {e}")
 
     try:
         shutil.rmtree(output_folder)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Error removing temporary folder {output_folder}: {e}")
 
     return total_records
 
-# === Step 2: Unzip the Zipped Data ===
 def unzip_data(zip_path, extract_to):
     try:
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(extract_to)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Error unzipping {zip_path} to {extract_to}: {e}")
 
-# === Step 3: Publish Extracted Data to Pub/Sub ===
+def futures_callback(future):
+    try:
+        # will raise if publish failed
+        message_id = future.result()
+    except Exception as e:
+        logger.error(f"[publish] failed: {e}")
+
 def publish_data(folder):
-    total_published = 0
+    count = 0
+    futures_list = []
+
     for filename in os.listdir(folder):
-        if filename.endswith(".json"):
-            file_path = os.path.join(folder, filename)
+        if not filename.endswith(".json"):
+            continue
+        file_path = os.path.join(folder, filename)
+        try:
+            with open(file_path, "r") as f:
+                records = json.load(f)
+        except Exception as e:
+            logger.error(f"Error reading JSON {file_path}: {e}")
+            continue
+
+        # schedule each record for publish
+        for record in records:
+            count += 1
+            data = json.dumps(record).encode("utf-8")
             try:
-                with open(file_path, "r") as f:
-                    records = json.load(f)
-                    futures = []
-                    for record in records:
-                        data = json.dumps(record).encode("utf-8")
-                        try:
-                            future = publisher.publish(topic_path, data)
-                            futures.append(future)
-                        except Exception:
-                            pass
+                future = publisher.publish(topic_path, data)
+                future.add_done_callback(futures_callback)
+                futures_list.append(future)
+            except Exception as e:
+                logger.error(f"Error publishing record {record.get('vehicle_id', '')}: {e}")
 
-                    for future in futures:
-                        try:
-                            future.result()
-                            total_published += 1
-                        except Exception:
-                            pass
+        # remove the file once its records are scheduled
+        try:
+            os.remove(file_path)
+        except Exception as e:
+            logger.error(f"Error removing processed file {file_path}: {e}")
 
-                os.remove(file_path)
-            except Exception:
-                pass
-    return total_published
+    # wait for all publishes to finish, using continue instead of pass
+    for future in concurrent.futures.as_completed(futures_list):
+        continue
 
-# === MAIN ===
+    return count
+
 def main():
     gathered = gather_bus_data()
     print(f"Total breadcrumbs saved: {gathered}")
@@ -118,8 +137,8 @@ def main():
 
         try:
             shutil.rmtree(extract_folder)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error cleaning up {extract_folder}: {e}")
 
 if __name__ == "__main__":
     main()
