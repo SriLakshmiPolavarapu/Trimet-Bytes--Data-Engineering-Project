@@ -129,6 +129,8 @@ if not df.empty:
         except AssertionError:
             raise ValueError("Invalid DAY_OF_WEEK")
 
+    # === Filter out invalid rows ===
+    valid_rows = []
     for i, row in df.iterrows():
         try:
             assert_opd_date(row)
@@ -141,8 +143,11 @@ if not df.empty:
             assert_speed(row)
             assert_timestamp(row)
             assert_day_of_week(row)
+            valid_rows.append(row)
         except Exception as e:
             print(f"[Validation] Row {i} failed validation: {e}")
+
+    df = pd.DataFrame(valid_rows)
 
     # === Transformation for DB ===
     result_df = df.drop_duplicates(subset=['EVENT_NO_TRIP'], keep='first').copy()
@@ -197,7 +202,7 @@ if not df.empty:
     conn.close()
 
     # === Output ===
-    print(f"Total messages received: {len(df)}")
+    print(f"Total messages received: {len(json_list)}")
     print(f"Valid trips inserted: {len(df_trip)}")
     print(f"Valid breadcrumbs inserted: {len(df_breadcrumb)}")
 
@@ -213,7 +218,7 @@ if not df.empty:
         total_trips = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM breadcrumb;")
         total_breadcrumbs = cursor.fetchone()[0]
-        print(f" Total rows in DB - trip: {total_trips}, breadcrumb: {total_breadcrumbs}")
+        print(f"Total rows in DB - trip: {total_trips}, breadcrumb: {total_breadcrumbs}")
         cursor.close()
         conn.close()
     except Exception as e:
