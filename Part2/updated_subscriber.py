@@ -11,7 +11,7 @@ project_id = "dataengineeringproject-456307"
 subscription_id = "MyTopic1-sub"
 DBname = "trimet_data"
 DBuser = "srilakshmi"
-DBpwd = "srilu2001"
+DBpwd = "####"
 
 # === Pub/Sub Setup ===
 subscriber = pubsub_v1.SubscriberClient()
