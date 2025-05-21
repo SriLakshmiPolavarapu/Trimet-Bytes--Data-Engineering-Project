@@ -217,7 +217,7 @@ if not df.empty:
         total_trips = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM breadcrumb;")
         total_breadcrumbs = cursor.fetchone()[0]
-        print(f"🗃️ Total rows in DB - trip: {total_trips}, breadcrumb: {total_breadcrumbs}")
+        print(f"Total rows in DB - trip: {total_trips}, breadcrumb: {total_breadcrumbs}")
         cursor.close()
         conn.close()
     except Exception as e:
