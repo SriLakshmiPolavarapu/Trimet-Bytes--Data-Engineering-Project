@@ -200,8 +200,7 @@ if not df.empty:
     copy_from_df(conn, df_trip, "trip")
     copy_from_df(conn, df_breadcrumb, "breadcrumb")
     conn.close()
-
-    # === Output ===
+    
     print(f"Total messages received: {len(json_list)}")
     print(f"Valid trips inserted: {len(df_trip)}")
     print(f"Valid breadcrumbs inserted: {len(df_breadcrumb)}")
@@ -218,7 +217,7 @@ if not df.empty:
         total_trips = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM breadcrumb;")
         total_breadcrumbs = cursor.fetchone()[0]
-        print(f"Total rows in DB - trip: {total_trips}, breadcrumb: {total_breadcrumbs}")
+        print(f"🗃️ Total rows in DB - trip: {total_trips}, breadcrumb: {total_breadcrumbs}")
         cursor.close()
         conn.close()
     except Exception as e:
