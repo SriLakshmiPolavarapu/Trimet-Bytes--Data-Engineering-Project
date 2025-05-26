@@ -5,31 +5,26 @@ from datetime import datetime, timedelta
 import psycopg2
 from io import StringIO
 
-# Configuration
 VEHICLE_IDS_CSV = "vehicle_ids.csv"
 DB_CONFIG = {
     "host": "localhost",
     "database": "trimet_data",
     "user": "srilakshmi",
-    "password": "srilu2001",
+    "password": "####",
     "port": 5432
 }
 URL_TEMPLATE = "https://busdata.cs.pdx.edu/api/getBreadCrumbs?vehicle_id={}"
 
-# Fetch breadcrumb data
 def fetch_breadcrumb_data(vehicle_id):
     url = URL_TEMPLATE.format(vehicle_id)
     try:
         response = requests.get(url)
         if response.status_code == 200 and response.text.strip():
             return response.json()
-        else:
-            print(f" No data for vehicle {vehicle_id}, status: {response.status_code}")
-    except Exception as e:
-        print(f" Error fetching vehicle {vehicle_id}: {e}")
+    except:
+        pass
     return []
 
-# Transform into cleaned DataFrame
 def transform_breadcrumbs(records):
     df = pd.DataFrame(records)
     if df.empty or 'OPD_DATE' not in df.columns:
@@ -55,7 +50,6 @@ def transform_breadcrumbs(records):
 
     return breadcrumb_df
 
-# PostgreSQL COPY
 def copy_from_df(conn, df, table_name):
     buffer = StringIO()
     df = df.where(pd.notnull(df), None)
@@ -65,17 +59,13 @@ def copy_from_df(conn, df, table_name):
     try:
         cursor.copy_from(buffer, table_name, sep=",", null='\\N')
         conn.commit()
-        print(f" Loaded {table_name} with {len(df)} rows")
-    except Exception as e:
-        print(f" Error inserting into {table_name}: {e}")
+    except:
         conn.rollback()
     finally:
         cursor.close()
 
-# Main
 def main():
     if not os.path.exists(VEHICLE_IDS_CSV):
-        print(f" Missing vehicle ID CSV file: {VEHICLE_IDS_CSV}")
         return
 
     vehicle_ids = pd.read_csv(VEHICLE_IDS_CSV, header=None)[0].astype(str).tolist()
@@ -83,16 +73,13 @@ def main():
     for vid in vehicle_ids:
         data = fetch_breadcrumb_data(vid)
         if data:
-            print(f" Fetched {len(data)} breadcrumbs for vehicle {vid}")
             all_records.extend(data)
 
     df = transform_breadcrumbs(all_records)
     if df.empty:
-        print(" No valid breadcrumb data to load.")
         return
 
-    print(f" Final breadcrumb rows ready to insert: {len(df)}")
-    print(df.head())
+    print(f"Final breadcrumb rows ready to insert: {len(df)}")
 
     conn = psycopg2.connect(**DB_CONFIG)
     copy_from_df(conn, df, "breadcrumb")
