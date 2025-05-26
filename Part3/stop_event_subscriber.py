@@ -83,7 +83,7 @@ if __name__ == "__main__":
         'host': 'localhost',
         'database': 'trimet_data',
         'user': 'srilakshmi',
-        'password': 'srilu2001'
+        'password': '####'
     }
 
     subscriber = StopEventSubscriber(
