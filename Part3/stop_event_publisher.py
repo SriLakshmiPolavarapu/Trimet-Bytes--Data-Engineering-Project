@@ -44,7 +44,6 @@ class StopEventPublisher:
                     file_path = os.path.join(self.output_folder, f"stop_{vid}_{self.today_str}.json")
                     with open(file_path, "w") as out:
                         json.dump(records, out)
-                    print(f" Collected {len(records)} records for vehicle {vid}")
                 else:
                     self.logger.warning(f"No stop data for vehicle {vid} - Status: {response.status_code}")
             except Exception as e:
